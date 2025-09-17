@@ -1,0 +1,18 @@
+# Ascender AgentHub ATTP Core License
+
+**Copyright (c) 2025 Ascender. All rights reserved.**
+
+The **ATTP Core** library is distributed as part of the **Ascender AgentHub** ecosystem.
+
+## License Conditions
+
+1. The source code of ATTP Core may be available in binary or source form for inspection, learning, or development purposes.
+2. ATTP Core **may not be used, copied, modified, merged, published, distributed, sublicensed, or sold** except as explicitly permitted under a valid license agreement with Ascender.
+3. Use of ATTP Core **outside of the AgentHub platform** is strictly prohibited. Even though ATTP Core may be publicly available (e.g., on PyPI), it remains subject to these restrictions.
+4. Integration, redistribution, or usage of ATTP Core in any other products or services is not permitted without prior written authorization from Ascender.
+
+## Disclaimer
+
+This software is provided **“AS IS”**, without warranty of any kind, express or implied, including but not limited to warranties of merchantability, fitness for a particular purpose, or non-infringement.
+
+In no event shall Ascender, its affiliates, or contributors be liable for any damages or claims, whether in contract, tort, or otherwise, arising from or in connection with the software or its use.
