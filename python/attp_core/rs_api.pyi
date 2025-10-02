@@ -18,6 +18,8 @@ class AttpCommand(Enum):
     READY = 5
     PING = 6
     PONG = 7
+    DISCONNECT = 8
+    DEFER = 9
 
 
 class AttpMessage:
@@ -55,6 +57,7 @@ class Session:
     async def start_listener(self) -> None: ...
     async def start_handler(self) -> None: ...
     def stop_listener(self) -> None: ...
+    def disconnect(self) -> None: ...
 
 
 class AttpTransport:

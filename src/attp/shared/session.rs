@@ -69,7 +69,7 @@ impl Session {
         let (reader, writer) = tokio::io::split(socket);
 
         let tx = Session::run_writer_task(writer);
-
+        
         return Self {
             tx,
             reader: Arc::new(Mutex::new(reader)),
@@ -163,7 +163,7 @@ impl Session {
                     eprintln!("Errors with decoding: {}", e);
 
                     let _ = self
-                        ._send(AttpMessage::new(1u16, 3, None, None, [0, 1]))
+                        ._send(AttpMessage::new(0u16, 3, None, None, b"01".clone()))
                         .await
                         .ok();
                 }
