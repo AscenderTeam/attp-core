@@ -100,8 +100,7 @@ impl Session {
 
         tokio::spawn(async move {
             while let Some(buf) = rx.recv().await {
-                if let Err(e) = writer.write_all(&buf).await {
-                    eprintln!("write error: {e}");
+                if writer.write_all(&buf).await.is_err() {
                     break;
                 }
             }
@@ -135,8 +134,7 @@ impl Session {
                         match read_buf {
                             Ok(n) => n,
                             Err(e) => {
-                                eprintln!("Error reading from socket: {}", e);
-                                return Err(e.to_string()); // Выходим с ошибкой
+                                return Err(e.to_string());
                             }
                         }
                     },
@@ -145,7 +143,6 @@ impl Session {
 
             if read_result == 0 {
                 // Connection closed
-                println!("Connection closed by peer.");
                 self.message_writer.take();
                 self.shutdown_rx.take();
                 break;
@@ -153,15 +150,11 @@ impl Session {
 
             match self.read_batch(max_output, max_bytes) {
                 Ok(r) => {
-                    println!("Received a messages from ATTP client: {}", r.len());
-
                     if !self.message_writer.is_none() {
                         let _ = self.message_writer.as_ref().unwrap().send(r).await;
                     }
                 }
-                Err(e) => {
-                    eprintln!("Errors with decoding: {}", e);
-
+                Err(_e) => {
                     let _ = self
                         ._send(AttpMessage::new(0u16, 3, None, None, b"01".clone()))
                         .await
@@ -217,9 +210,7 @@ impl Session {
 
         let bytes = frame.to_bytes();
 
-        if let Err(e) = self.tx.send(bytes).await {
-            eprintln!("Failed to send message {}", e);
-        }
+        let _ = self.tx.send(bytes).await;
 
         Ok(())
     }
@@ -232,9 +223,7 @@ impl Session {
             all_bytes.extend_from_slice(&bytes);
         }
 
-        if let Err(e) = self.tx.send(all_bytes).await {
-            eprintln!("Failed to send message {}", e);
-        }
+        let _ = self.tx.send(all_bytes).await;
 
         Ok(())
     }
@@ -341,14 +330,12 @@ impl Session {
         }
 
         let inner = self.clone();
-        if let Err(err) = pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let _ = pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let frame = PyAttpMessage::new(0, AttpCommand::DISCONNECT, None, None, [0, 1]);
 
             inner._send(frame.to_attp()).await.map_err(to_py_io_err)?;
             Ok(())
-        }) {
-            eprintln!("Failed to send disconnect frame: {}", err);
-        }
+        });
 
         self.shutdown_tx
             .as_ref()
@@ -362,7 +349,6 @@ impl Session {
 impl Session {
     pub async fn handle_messages(&mut self) {
         if self.message_reader.is_none() {
-            eprint!("Cannot start message handler, make sure you initialized message reader by executing Session.start_listening(...)");
             return;
         }
 
@@ -371,8 +357,6 @@ impl Session {
             loop {
                 if let Some(received) = receiver_guard.recv().await {
                     Python::attach(|py| {
-                        println!("Received {} messages to forward to Python", received.len());
-                        println!("Message frame example: {:?}", received.get(0));
                         let py_attp_messages =
                             PyList::new(py, received.iter().map(|i| PyAttpMessage::from_attp(i)))
                                 .unwrap_or_else(|_| PyList::empty(py));
