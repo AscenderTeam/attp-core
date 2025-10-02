@@ -17,13 +17,13 @@
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use pyo3::{exceptions::PyValueError, pyclass, pymethods, PyResult};
-use std::convert::TryFrom;
+use std::{convert::TryFrom, hash::Hash};
 
 use crate::{attp::{shared::errors::DecodeError, utils::{read_var_u32, take_exact, write_var_u32}}, config::{Limits, MAGIC}};
 
 
 #[pyclass]
-#[derive(Clone, Debug, PartialEq, IntoPrimitive, TryFromPrimitive)]
+#[derive(Clone, Copy, Hash, Debug, PartialEq, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
 pub enum AttpCommand {
     CALL = 0,
@@ -36,6 +36,7 @@ pub enum AttpCommand {
     PING = 6,
     PONG = 7,
     DISCONNECT = 8,
+    DEFER = 9
 }
 
 
@@ -52,6 +53,19 @@ impl AttpCommand {
     fn __str__(&self) -> String {
         format!("{:?}", self)
     }
+    
+    fn __hash__(&self) -> isize {
+        // hash by discriminant
+        *self as isize
+    }
+
+    // fn __richcmp__(&self, other: PyRef<Self>, op: CompareOp) -> bool {
+    //     match op {
+    //         CompareOp::Eq => self == &*other,
+    //         CompareOp::Ne => self != &*other,
+    //         _ => false,
+    //     }
+    // }
 }
 
 
@@ -109,7 +123,7 @@ impl AttpMessage {
         let ver = take_exact(buf, &mut off, 2)?;
         let version = [ver[0], ver[1]];
 
-        if version[0] == 0 { return Err(DecodeError::BadVersion(version)) }
+        // if version[0] == 0 { return Err(DecodeError::BadVersion(version)) }
 
         
         let cmd_raw = *take_exact(buf, &mut off, 1)?.first().unwrap();
@@ -184,7 +198,7 @@ impl AttpMessage {
         out.push(self.command_type.clone() as u8);
 
         // Form route id
-        out.extend_from_slice(&self.route_id.to_be_bytes());
+        out.extend_from_slice(&self.route_id.to_le_bytes());
 
         // Correlation ID, in this part we pass byte 1 to the binary if there's a correlation ID in the AttpMessage
         // Otherwise we pass 0 and skip right to the payload leaving correlation ID alone.
