@@ -101,9 +101,7 @@ impl AttpTransport {
                                 pyo3_async_runtimes::tokio::into_future(connect_hook.call1((object,))?)
                             })?;
                             tokio::spawn(async move {
-                                if let Err(e) = fire.await {
-                                    eprintln!("connect_hook error: {:?}", e);
-                                }
+                                let _ = fire.await;
                             });
                         }
                 }

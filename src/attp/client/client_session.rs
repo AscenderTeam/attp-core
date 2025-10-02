@@ -60,8 +60,7 @@ impl AttpClientSession {
 
         tokio::spawn(async move {
             while let Some(buf) = rx.recv().await {
-                if let Err(e) = writer.write_all(&buf).await {
-                    eprintln!("write error: {e}");
+                if writer.write_all(&buf).await.is_err() {
                     break;
                 }
             }
@@ -79,15 +78,9 @@ impl AttpClientSession {
                 }
                 tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
                 if let Some(session) = inner.session.clone() {
-                    if let Err(err) = session
+                    let _ = session
                         ._send(AttpMessage::new(0, 6, None, None, b"01".clone()))
-                        .await
-                    {
-                        eprintln!(
-                            "An error happened during the attempt to ping the client {}",
-                            err
-                        );
-                    }
+                        .await;
                 }
             }
         });
@@ -98,11 +91,7 @@ impl AttpClientSession {
         let socket = TcpStream::connect(format!("{}:{}", inner.host, inner.port)).await;
         let session_id = Uuid::new_v4().to_string();
 
-        if let Err(err) = socket {
-            eprintln!(
-                "Error: Failed to estabilish connection to TCP server {}",
-                &err
-            );
+        if socket.is_err() {
             return None;
         }
 
