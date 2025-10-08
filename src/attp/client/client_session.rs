@@ -14,9 +14,10 @@
 ///
 ///  Developed by the Ascender AgentHub team.
 /// =============================================
-
 use pyo3::{
-    exceptions::{PyConnectionError, PyValueError}, pyclass, pymethods, Bound, PyAny, PyResult, Python
+    Bound, PyAny, PyResult, Python,
+    exceptions::{PyConnectionError, PyValueError},
+    pyclass, pymethods,
 };
 use tokio::{
     io::{AsyncWriteExt, WriteHalf},
@@ -26,7 +27,10 @@ use tokio::{
 use uuid::Uuid;
 
 use crate::{
-    attp::{shared::{command::AttpMessage, session::Session}, utils::parse_connection_string},
+    attp::{
+        shared::{command::AttpMessage, session::Session},
+        utils::parse_connection_string,
+    },
     config::Limits,
 };
 
@@ -39,16 +43,19 @@ pub struct AttpClientSession {
     pub port: u16,
     #[pyo3(get)]
     pub session: Option<Session>,
+    #[pyo3(get)]
+    pub limits: Limits,
 }
 
 impl AttpClientSession {
-    pub fn from_session(host: String, port: u16, mut session: Session) -> Self {
+    pub fn from_session(host: String, port: u16, mut session: Session, limits: Limits) -> Self {
         session.start_listening();
-        
+
         let instance = Self {
             host,
             port,
             session: Some(session),
+            limits,
         };
 
         instance.pinger();
@@ -73,20 +80,41 @@ impl AttpClientSession {
         let inner = self.clone();
         tokio::spawn(async move {
             loop {
-                if inner.session.is_none() {
-                    break;
-                }
                 tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-                if let Some(session) = inner.session.clone() {
-                    let _ = session
-                        ._send(AttpMessage::new(0, 6, None, None, b"01".clone()))
-                        .await;
+
+                let Some(session) = inner.session.clone() else {
+                    break;
+                };
+
+                if let Err(err) = session
+                    ._send(AttpMessage::new(0, 6, None, None, b"01".clone()))
+                    .await
+                {
+                    eprintln!("[AttpClientSession] Lost connection: {:?}", err);
+                    // Gracefully shut down the session
+                    if let Some(s) = inner.session.clone() {
+                        let _ = s.stop_listener();
+                    }
+                    break;
                 }
             }
         });
     }
 
-    pub async fn _connect(&self, limits: Limits) -> Option<Session> {
+    pub async fn try_reconnect(&self) -> Option<Session> {
+        for attempt in 1..=3 {
+            eprintln!("[AttpClientSession] Reconnect attempt {attempt}...");
+            match self._connect().await {
+                Some(session) => return Some(session),
+                None => {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                }
+            }
+        }
+        None
+    }
+
+    pub async fn _connect(&self) -> Option<Session> {
         let inner = self.clone();
         let socket = TcpStream::connect(format!("{}:{}", inner.host, inner.port)).await;
         let session_id = Uuid::new_v4().to_string();
@@ -95,7 +123,7 @@ impl AttpClientSession {
             return None;
         }
 
-        let session = Session::new(socket.unwrap(), session_id, limits);
+        let session = Session::new(socket.unwrap(), session_id, self.limits);
 
         return Some(session);
     }
@@ -104,13 +132,14 @@ impl AttpClientSession {
 #[pymethods]
 impl AttpClientSession {
     #[new]
-    fn new(connection_string: String) -> PyResult<Self> {
+    fn new(connection_string: String, limits: Limits) -> PyResult<Self> {
         let (host, port) =
-            parse_connection_string(connection_string).map_err(|e| PyValueError::new_err(e))?;
+            parse_connection_string(connection_string).map_err(PyValueError::new_err)?;
         Ok(Self {
             host,
             port,
             session: None,
+            limits,
         })
     }
 
@@ -118,7 +147,7 @@ impl AttpClientSession {
     /// Returns True if connected, False otherwise
     #[getter]
     pub fn is_connected(&self) -> bool {
-        return self.session.is_some();
+        self.session.is_some()
     }
 
     pub fn disconnect(&mut self) -> PyResult<()> {
@@ -137,21 +166,26 @@ impl AttpClientSession {
     pub fn connect<'p>(
         &self,
         py: Python<'p>,
-        max_retries: usize,
-        limits: Limits,
+        max_retries: usize
     ) -> PyResult<Bound<'p, PyAny>> {
         let mut attempts: usize = 0;
 
         let host = self.host.clone();
-        let port = self.port.clone();
+        let port = self.port;
+        let limits = self.limits;
 
         let inner = self.clone();
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             while attempts < max_retries {
-                let session = inner._connect(limits.clone()).await;
-                if session.is_some() {
-                    return Ok(AttpClientSession::from_session(host, port, session.unwrap()));
+                let session = inner._connect().await;
+                if let Some(session) = session {
+                    return Ok(AttpClientSession::from_session(
+                        host.clone(),
+                        port,
+                        session,
+                        limits
+                    ));
                 } else {
                     attempts += 1;
                 }
