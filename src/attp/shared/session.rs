@@ -142,6 +142,13 @@ impl Session {
             };
 
             if read_result == 0 {
+                if !self.message_writer.is_none() {
+                    let _ = self
+                        ._send(AttpMessage::new(0u16, 8, None, None, b"01".clone()))
+                        .await
+                        .ok();
+                }
+
                 // Connection closed
                 self.message_writer.take();
                 self.shutdown_rx.take();
