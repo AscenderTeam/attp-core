@@ -36,7 +36,10 @@ pub enum AttpCommand {
     PING = 6,
     PONG = 7,
     DISCONNECT = 8,
-    DEFER = 9
+    DEFER = 9,
+    STREAMBOS = 10,
+    CHUNK = 11,
+    STREAMEOS = 12
 }
 
 
@@ -85,7 +88,7 @@ impl PartialEq for AttpMessage {
         if self.correlation_id.is_none() {
             return self.command_type == other.command_type && self.route_id == other.route_id;
         }
-
+        
         self.correlation_id == other.correlation_id
     }
 }
@@ -166,7 +169,11 @@ impl AttpMessage {
         // We do check on them, for ACK, CALL and ERR
         
         match command_type {
-            AttpCommand::ACK | AttpCommand::CALL => {
+            AttpCommand::ACK | 
+            AttpCommand::CALL | 
+            AttpCommand::STREAMBOS | 
+            AttpCommand::STREAMEOS | 
+            AttpCommand::CHUNK => {
                 if correlation_id.is_none() {
                     return Err(DecodeError::MissingCorrelation(command_type));
                 }

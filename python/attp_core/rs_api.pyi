@@ -20,6 +20,10 @@ class AttpCommand(Enum):
     PONG = 7
     DISCONNECT = 8
     DEFER = 9
+    
+    STREAMBOS = 10
+    CHUNK = 11
+    STREAMEOS = 12
 
 
 class AttpMessage:
