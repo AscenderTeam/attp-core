@@ -19,6 +19,7 @@ use pyo3::{
     exceptions::{PyConnectionError, PyValueError},
     pyclass, pymethods,
 };
+use log::{error, info, warn};
 use tokio::{
     io::{AsyncWriteExt, WriteHalf},
     net::TcpStream,
@@ -90,7 +91,7 @@ impl AttpClientSession {
                     ._send(AttpMessage::new(0, 6, None, None, b"01".clone()))
                     .await
                 {
-                    eprintln!("[AttpClientSession] Lost connection: {:?}", err);
+                    warn!("[AttpClientSession] Lost connection: {:?}", err);
                     // Gracefully shut down the session
                     if let Some(s) = inner.session.clone() {
                         let _ = s.stop_listener();
@@ -103,7 +104,7 @@ impl AttpClientSession {
 
     pub async fn try_reconnect(&self) -> Option<Session> {
         for attempt in 1..=3 {
-            eprintln!("[AttpClientSession] Reconnect attempt {attempt}...");
+            warn!("[AttpClientSession] Reconnect attempt {attempt}...");
             match self._connect().await {
                 Some(session) => return Some(session),
                 None => {
@@ -120,6 +121,12 @@ impl AttpClientSession {
         let session_id = Uuid::new_v4().to_string();
 
         if socket.is_err() {
+            warn!(
+                "[AttpClientSession] Failed to connect to {}:{}: {:?}",
+                inner.host,
+                inner.port,
+                socket.as_ref().err()
+            );
             return None;
         }
 
@@ -178,8 +185,10 @@ impl AttpClientSession {
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             while attempts < max_retries {
+                info!("[AttpClientSession] Connect attempt {}/{}", attempts + 1, max_retries);
                 let session = inner._connect().await;
                 if let Some(session) = session {
+                    info!("[AttpClientSession] Connected to {}:{}", host, port);
                     return Ok(AttpClientSession::from_session(
                         host.clone(),
                         port,
@@ -188,8 +197,16 @@ impl AttpClientSession {
                     ));
                 } else {
                     attempts += 1;
+                    warn!("[AttpClientSession] Connect attempt {} failed, retrying...", attempts);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                 }
             }
+            error!(
+                "[AttpClientSession] Failed to connect to the ATTP server at {}:{} after {} attempts!",
+                host,
+                port,
+                max_retries
+            );
             Err(PyConnectionError::new_err(format!(
                 "Failed to connect to the ATTP server at {}:{} after {} attempts!",
                 host, port, max_retries

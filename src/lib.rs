@@ -16,7 +16,8 @@
 /// =============================================
 
 
-use pyo3::prelude::*;
+use pyo3::{prelude::*, exceptions::PyRuntimeError};
+use env_logger::Env;
 
 use crate::{attp::{client::client_session::AttpClientSession, shared::{command::{AttpCommand, AttpMessage}, pyattp_message::PyAttpMessage, session::Session}, server::transport::AttpTransport}, config::Limits};
 
@@ -34,6 +35,20 @@ fn attp_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Limits>()?;
     m.add_class::<AttpCommand>()?;
     m.add_class::<AttpClientSession>()?;
+    m.add_function(wrap_pyfunction!(init_logging, m)?)?;
 
+    Ok(())
+}
+
+#[pyfunction]
+fn init_logging() -> PyResult<()> {
+    // Initialize logger once; ignore error if already initialized.
+    let mut builder = env_logger::Builder::from_env(Env::default().default_filter_or("info"));
+    if let Err(e) = builder.try_init() {
+        if e.to_string().contains("initialized") {
+            return Ok(());
+        }
+        return Err(PyRuntimeError::new_err(e.to_string()));
+    }
     Ok(())
 }

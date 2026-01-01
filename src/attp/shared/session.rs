@@ -126,6 +126,7 @@ impl Session {
                 let mut reader_guard = self.reader.lock().await;
                 tokio::select! {
                     _ = shutdown_rx.changed() => {
+                        let _ = self.message_writer.as_ref().unwrap().send(vec![AttpMessage::new(0u16, 8, None, None, b"01".clone())]).await;
                         self.message_writer.take();
                         self.shutdown_rx.take();
                         break;
@@ -147,6 +148,8 @@ impl Session {
                         ._send(AttpMessage::new(0u16, 8, None, None, b"01".clone()))
                         .await
                         .ok();
+
+                    let _ = self.message_writer.as_ref().unwrap().send(vec![AttpMessage::new(0u16, 8, None, None, b"01".clone())]).await;
                 }
 
                 // Connection closed
@@ -362,19 +365,22 @@ impl Session {
         if let Some(receiver) = &mut self.message_reader {
             let mut receiver_guard = receiver.lock().await;
             loop {
-                if let Some(received) = receiver_guard.recv().await {
-                    Python::attach(|py| {
-                        let py_attp_messages =
-                            PyList::new(py, received.iter().map(|i| PyAttpMessage::from_attp(i)))
-                                .unwrap_or_else(|_| PyList::empty(py));
-                        for event_receiver in self.event_receivers.lock().unwrap().iter() {
-                            let bound_receiver = event_receiver.bind(py).to_owned();
-                            if let Ok(awaitable) = bound_receiver.call1((py_attp_messages.clone(),))
-                            {
-                                pyo3_async_runtimes::tokio::into_future(awaitable).ok();
+                match receiver_guard.recv().await {
+                    Some(received) => {
+                        Python::attach(|py| {
+                            let py_attp_messages =
+                                PyList::new(py, received.iter().map(|i| PyAttpMessage::from_attp(i)))
+                                    .unwrap_or_else(|_| PyList::empty(py));
+                            for event_receiver in self.event_receivers.lock().unwrap().iter() {
+                                let bound_receiver = event_receiver.bind(py).to_owned();
+                                if let Ok(awaitable) = bound_receiver.call1((py_attp_messages.clone(),))
+                                {
+                                    pyo3_async_runtimes::tokio::into_future(awaitable).ok();
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
+                    None => break,
                 }
             }
         }
