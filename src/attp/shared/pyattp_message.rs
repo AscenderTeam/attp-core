@@ -16,6 +16,7 @@
 /// =============================================
 
 use pyo3::{pyclass, pymethods};
+use log::{debug, trace};
 
 use crate::attp::shared::command::{AttpCommand, AttpMessage};
 
@@ -42,6 +43,12 @@ pub struct PyAttpMessage {
 impl PyAttpMessage {
     #[new]
     pub fn new(route_id: u16, command_type: AttpCommand, correlation_id: Option<[u8; 16]>, payload: Option<Vec<u8>>, version: [u8;2]) -> Self {
+        debug!(
+            "[PyAttpMessage] New message route_id={}, command={:?}, has_payload={}",
+            route_id,
+            command_type,
+            payload.is_some()
+        );
         Self {
             route_id,
             command_type,
@@ -53,6 +60,11 @@ impl PyAttpMessage {
 
     #[getter]
     pub fn bytes(&self) -> Vec<u8> {
+        trace!(
+            "[PyAttpMessage] Serializing to bytes route_id={}, command={:?}",
+            self.route_id,
+            self.command_type
+        );
         let attp_message = self.to_attp();
         attp_message.to_bytes()
     }

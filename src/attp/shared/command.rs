@@ -18,6 +18,7 @@
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use pyo3::{exceptions::PyValueError, pyclass, pymethods, PyResult};
 use std::{convert::TryFrom, hash::Hash};
+use log::warn;
 
 use crate::{attp::{shared::errors::DecodeError, utils::{read_var_u32, take_exact, write_var_u32}}, config::{Limits, MAGIC}};
 
@@ -102,7 +103,13 @@ impl AttpMessage {
         payload: Option<Vec<u8>>,
         version: [u8;2]
     ) -> Self {
-        let command_type = AttpCommand::try_from(command_type).unwrap_or(AttpCommand::ERR);
+        let command_type = match AttpCommand::try_from(command_type) {
+            Ok(cmd) => cmd,
+            Err(_) => {
+                warn!("[AttpMessage] Unknown command type {}, defaulting to ERR", command_type);
+                AttpCommand::ERR
+            }
+        };
         
         Self {
             route_id: route_id,
@@ -245,7 +252,13 @@ impl AttpMessage {
     
     #[staticmethod]
     pub fn get_from_bytes(buf: &[u8], limits: &Limits) -> PyResult<(AttpMessage, usize)> {
-        return AttpMessage::from_bytes(buf, limits).map_err(|e| PyValueError::new_err(e.to_string()));
+        match AttpMessage::from_bytes(buf, limits) {
+            Ok(result) => Ok(result),
+            Err(e) => {
+                warn!("[AttpMessage] Decode failed: {e}");
+                Err(PyValueError::new_err(e.to_string()))
+            }
+        }
     }
 
     pub fn convert_to_bytes(&self) -> Vec<u8> {

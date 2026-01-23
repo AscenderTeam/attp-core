@@ -1,11 +1,12 @@
 import asyncio
-from python.attp_core.rs_api import AttpClientSession, AttpCommand, Limits, PyAttpMessage, Session
+from python.attp_core.rs_api import AttpClientSession, AttpCommand, Limits, PyAttpMessage, Session, init_logging
 
 
 async def main():
-    transport = AttpClientSession("attp://localhost:8888")
+    transport = AttpClientSession("attp://localhost:8888", Limits(2000))
+    init_logging()
     
-    transport = await transport.connect(10, Limits(2000))
+    transport = await transport.connect(10)
     
     async def on_event(msg: list[PyAttpMessage]):
         print(type(msg))

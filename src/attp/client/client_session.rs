@@ -19,7 +19,7 @@ use pyo3::{
     exceptions::{PyConnectionError, PyValueError},
     pyclass, pymethods,
 };
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use tokio::{
     io::{AsyncWriteExt, WriteHalf},
     net::TcpStream,
@@ -51,6 +51,7 @@ pub struct AttpClientSession {
 impl AttpClientSession {
     pub fn from_session(host: String, port: u16, mut session: Session, limits: Limits) -> Self {
         session.start_listening();
+        let session_id = session.session_id.clone();
 
         let instance = Self {
             host,
@@ -59,6 +60,12 @@ impl AttpClientSession {
             limits,
         };
 
+        info!(
+            "[AttpClientSession] Session initialized id={} host={} port={}",
+            session_id,
+            instance.host,
+            instance.port
+        );
         instance.pinger();
         return instance;
     }
@@ -68,7 +75,8 @@ impl AttpClientSession {
 
         tokio::spawn(async move {
             while let Some(buf) = rx.recv().await {
-                if writer.write_all(&buf).await.is_err() {
+                if let Err(err) = writer.write_all(&buf).await {
+                    warn!("[AttpClientSession] Writer task failed: {err}");
                     break;
                 }
             }
@@ -80,10 +88,15 @@ impl AttpClientSession {
     pub fn pinger(&self) {
         let inner = self.clone();
         tokio::spawn(async move {
+            debug!(
+                "[AttpClientSession] Pinger started for {}:{}",
+                inner.host, inner.port
+            );
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
 
                 let Some(session) = inner.session.clone() else {
+                    debug!("[AttpClientSession] Pinger stopped (no active session)");
                     break;
                 };
 
@@ -105,17 +118,25 @@ impl AttpClientSession {
         for attempt in 1..=3 {
             warn!("[AttpClientSession] Reconnect attempt {attempt}...");
             match self._connect().await {
-                Some(session) => return Some(session),
+                Some(session) => {
+                    info!("[AttpClientSession] Reconnected successfully");
+                    return Some(session);
+                }
                 None => {
                     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 }
             }
         }
+        warn!("[AttpClientSession] Reconnect attempts exhausted");
         None
     }
 
     pub async fn _connect(&self) -> Option<Session> {
         let inner = self.clone();
+        debug!(
+            "[AttpClientSession] Connecting to {}:{}",
+            inner.host, inner.port
+        );
         let socket = TcpStream::connect(format!("{}:{}", inner.host, inner.port)).await;
         let session_id = Uuid::new_v4().to_string();
 
@@ -130,6 +151,10 @@ impl AttpClientSession {
         }
 
         let session = Session::new(socket.unwrap(), session_id, self.limits);
+        info!(
+            "[AttpClientSession] Connected to {}:{}",
+            inner.host, inner.port
+        );
 
         return Some(session);
     }
@@ -151,6 +176,7 @@ fn is_connection_error(err: &std::io::Error) -> bool {
 impl AttpClientSession {
     #[new]
     fn new(connection_string: String, limits: Limits) -> PyResult<Self> {
+        debug!("[AttpClientSession] Creating client session from connection string");
         let (host, port) =
             parse_connection_string(connection_string).map_err(PyValueError::new_err)?;
         Ok(Self {
@@ -174,6 +200,7 @@ impl AttpClientSession {
                 "Cannot close non-existing connection!",
             ));
         }
+        info!("[AttpClientSession] Disconnect requested");
         self.session.as_ref().unwrap().stop_listener()?;
         self.session = None;
         Ok(())

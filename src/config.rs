@@ -17,6 +17,7 @@
 
 
 use pyo3::{pyclass, pymethods};
+use log::debug;
 
 
 pub const MAGIC: &[u8;2] = b"AT";
@@ -31,8 +32,10 @@ pub struct Limits {
 impl Limits {
     #[new]
     fn new(max_payload_size: Option<usize>) -> Self {
+        let max_payload_size = max_payload_size.unwrap_or(64 * 1024);
+        debug!("[Limits] Initialized with max_payload_size={}", max_payload_size);
         Self {
-            max_payload_size: if let Some(o) = max_payload_size { o } else { 64 * 1024 },
+            max_payload_size,
         }
     }
 }

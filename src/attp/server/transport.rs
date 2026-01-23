@@ -21,6 +21,7 @@ use pyo3::{
     pyclass, pymethods,
     types::{PyAnyMethods, PyInt, PyString},
 };
+use log::{debug, info, warn};
 use tokio::{
     net::TcpListener,
     sync::watch::{self, Sender},
@@ -55,6 +56,7 @@ impl AttpTransport {
         on_connection: Py<PyAny>,
         limits: Limits,
     ) -> PyResult<Self> {
+        debug!("[AttpTransport] Initializing transport");
         Ok(Self {
             host: host.extract()?,
             port: port.extract()?,
@@ -67,6 +69,7 @@ impl AttpTransport {
     pub fn start_server<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let host = self.host.clone();
         let port = self.port.clone();
+        info!("[AttpTransport] Starting server on {}:{}", host, port);
 
         let connection_hook = self.on_connection.clone_ref(py);
         let limits = self.limits.clone();
@@ -79,16 +82,22 @@ impl AttpTransport {
             let listener = TcpListener::bind((host.as_str(), port))
                 .await
                 .map_err(|e| {
+                    warn!("[AttpTransport] Bind failed on {}:{}: {e}", host, port);
                     PyOSError::new_err(format!("Failed to estabilish connection because of {}", e))
                 })?;
+            info!("[AttpTransport] Listening on {}:{}", host, port);
 
             loop {
                 tokio::select! {
                         _ = rx.changed() => break,
                         accept_res = listener.accept() => {
-                            let (sock, _) = accept_res.map_err(|e| PyOSError::new_err(format!("Failed to accept connection {e}")))?;
+                            let (sock, _) = accept_res.map_err(|e| {
+                                warn!("[AttpTransport] Accept failed: {e}");
+                                PyOSError::new_err(format!("Failed to accept connection {e}"))
+                            })?;
 
                             let session_id = Uuid::new_v4().to_string();
+                            info!("[AttpTransport] Accepted connection session_id={}", session_id);
                             let session = Session::new(sock, session_id, limits);
 
                             let fire = Python::attach(|pyt| {
@@ -113,6 +122,7 @@ impl AttpTransport {
 
     pub fn stop_server(&self) -> PyResult<()> {
         if let Some(tx) = &self.shutdown_tx {
+            info!("[AttpTransport] Stop requested");
             let _ = tx.send(true);
         }
         Ok(())

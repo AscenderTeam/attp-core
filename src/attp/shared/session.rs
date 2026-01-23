@@ -30,6 +30,7 @@ use tokio::{
 };
 
 use bytes::{Buf, BytesMut};
+use log::{debug, error, info, trace, warn};
 
 use crate::{
     attp::shared::{command::{AttpCommand, AttpMessage}, errors::DecodeError, pyattp_message::PyAttpMessage},
@@ -69,7 +70,12 @@ impl Session {
         let (reader, writer) = tokio::io::split(socket);
 
         let tx = Session::run_writer_task(writer);
-        
+        debug!(
+            "[Session] New session id={} peer={} max_payload_size={}",
+            session_id,
+            peername,
+            limits.max_payload_size
+        );
         return Self {
             tx,
             reader: Arc::new(Mutex::new(reader)),
@@ -91,6 +97,7 @@ impl Session {
             && self.shutdown_rx.is_some()
             && self.shutdown_tx.is_some()
         {
+            debug!("[Session:{}] Listener already initialized", self.session_id);
             return;
         }
 
@@ -101,6 +108,7 @@ impl Session {
         self.shutdown_rx = Some(shutdown_rx);
         self.shutdown_tx = Some(shutdown_tx);
         self.message_reader = Some(Arc::new(Mutex::new(message_listener)));
+        debug!("[Session:{}] Listener channels initialized", self.session_id);
     }
 
     fn run_writer_task(mut writer: WriteHalf<TcpStream>) -> mpsc::Sender<Vec<u8>> {
@@ -108,7 +116,8 @@ impl Session {
 
         tokio::spawn(async move {
             while let Some(buf) = rx.recv().await {
-                if writer.write_all(&buf).await.is_err() {
+                if let Err(err) = writer.write_all(&buf).await {
+                    warn!("[Session] Writer task failed: {err}");
                     break;
                 }
             }
@@ -128,12 +137,14 @@ impl Session {
             return "Cannot start listener, make sure you initialized shutdown writer by executing Session.start_listening(...)";
         })?;
 
+        info!("[Session:{}] Listener started", self.session_id);
         loop {
             // Lock the reader only for the duration of the read, so the borrow ends before calling self.read_batch
             let read_result = {
                 let mut reader_guard = self.reader.lock().await;
                 tokio::select! {
                     _ = shutdown_rx.changed() => {
+                        info!("[Session:{}] Shutdown signal received", self.session_id);
                         let _ = self.message_writer.as_ref().unwrap().send(vec![AttpMessage::new(0u16, 8, None, None, b"01".clone())]).await;
                         self.message_writer.take();
                         self.shutdown_rx.take();
@@ -143,6 +154,7 @@ impl Session {
                         match read_buf {
                             Ok(n) => n,
                             Err(e) => {
+                                error!("[Session:{}] Read error: {e}", self.session_id);
                                 return Err(e.to_string());
                             }
                         }
@@ -151,6 +163,7 @@ impl Session {
             };
 
             if read_result == 0 {
+                info!("[Session:{}] Connection closed by peer", self.session_id);
                 if !self.message_writer.is_none() {
                     let _ = self
                         ._send(AttpMessage::new(0u16, 8, None, None, b"01".clone()))
@@ -168,8 +181,14 @@ impl Session {
 
             match self.read_batch(max_output, max_bytes) {
                 Ok(r) => {
+                    trace!(
+                        "[Session:{}] Decoded {} message(s) from buffer",
+                        self.session_id,
+                        r.len()
+                    );
                     for msg in r.iter() {
                         if msg.command_type == AttpCommand::PING {
+                            trace!("[Session:{}] Responding to PING", self.session_id);
                             let pong = AttpMessage::new(
                                 msg.route_id,
                                 AttpCommand::PONG as u8,
@@ -184,7 +203,8 @@ impl Session {
                         let _ = self.message_writer.as_ref().unwrap().send(r).await;
                     }
                 }
-                Err(_e) => {
+                Err(e) => {
+                    warn!("[Session:{}] Decode error: {e}", self.session_id);
                     let _ = self
                         ._send(AttpMessage::new(0u16, 3, None, None, b"01".clone()))
                         .await
@@ -238,6 +258,12 @@ impl Session {
     pub async fn _send(&self, frame: AttpMessage) -> tokio::io::Result<()> {
         // let _guard = self.writer_lock.lock().await; || We don't need this anymore lol >_0
 
+        trace!(
+            "[Session:{}] Sending frame command={:?} route_id={}",
+            self.session_id,
+            frame.command_type,
+            frame.route_id
+        );
         let bytes = frame.to_bytes();
 
         self.tx.send(bytes).await.map_err(|_| {
@@ -249,6 +275,11 @@ impl Session {
 
     /// Borrow checker hits hard
     pub async fn _send_batch(&self, frames: Vec<AttpMessage>) -> tokio::io::Result<()> {
+        trace!(
+            "[Session:{}] Sending batch of {} frame(s)",
+            self.session_id,
+            frames.len()
+        );
         let mut all_bytes = Vec::new();
         for frame in frames {
             let bytes = frame.to_bytes();
@@ -263,6 +294,7 @@ impl Session {
     }
 
     pub async fn disconnect_internal(&self) -> tokio::io::Result<()> {
+        info!("[Session:{}] Disconnect initiated", self.session_id);
         let frame = AttpMessage::new(0, AttpCommand::DISCONNECT as u8, None, None, b"01".clone());
         let _ = self._send(frame).await;
 
@@ -292,12 +324,19 @@ impl Session {
     /// `pysession.add_event_handler(...)``
     /// NOTE: This method isn't awaitable, callback also should be asynchronous!
     pub fn add_event_handler(&mut self, callback: Py<PyAny>) {
-        self.event_receivers.lock().unwrap().push(callback);
+        let mut receivers = self.event_receivers.lock().unwrap();
+        receivers.push(callback);
+        debug!(
+            "[Session:{}] Event handler added (total={})",
+            self.session_id,
+            receivers.len()
+        );
     }
 
     pub fn start_listener<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.start_listening();
         let mut inner = self.clone();
+        info!("[Session:{}] Listener task scheduled", self.session_id);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             inner
@@ -310,6 +349,7 @@ impl Session {
     pub fn start_handler<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.start_listening();
         let inner = Arc::new(Mutex::new(self.clone()));
+        info!("[Session:{}] Handler task scheduled", self.session_id);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let mut guard = inner.lock().await;
@@ -322,8 +362,10 @@ impl Session {
     /// Btw raises error if session isn't listening at all... >=)
     pub fn stop_listener(&self) -> PyResult<()> {
         if self.shutdown_tx.is_none() {
+            warn!("[Session:{}] Stop requested but listener is not running", self.session_id);
             return Err(PyOSError::new_err("Session isn't running at all!"));
         }
+        info!("[Session:{}] Stop requested", self.session_id);
         self.shutdown_tx
             .as_ref()
             .unwrap()
@@ -337,10 +379,19 @@ impl Session {
     pub fn send<'a>(&self, py: Python<'a>, frame: Bound<PyAny>) -> PyResult<Bound<'a, PyAny>> {
         // extract BEFORE creating the future, so we don’t hold the GIL inside await
         let msg: PyAttpMessage = frame.extract()?;
+        let attp_msg = msg.to_attp();
+        let command_type = attp_msg.command_type;
+        let route_id = attp_msg.route_id;
+        debug!(
+            "[Session:{}] Sending frame command={:?} route_id={}",
+            self.session_id,
+            command_type,
+            route_id
+        );
         let inner = self.clone();
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            inner._send(msg.to_attp()).await.map_err(to_py_io_err)?;
+            inner._send(attp_msg).await.map_err(to_py_io_err)?;
             Ok(())
         })
     }
@@ -361,6 +412,11 @@ impl Session {
         let inner = self.clone();
 
         let attpified_frames = Vec::from_iter(frames_vec.iter().map(|i| i.to_attp()));
+        debug!(
+            "[Session:{}] Sending batch of {} frame(s)",
+            self.session_id,
+            attpified_frames.len()
+        );
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             inner
                 ._send_batch(attpified_frames)
@@ -372,10 +428,12 @@ impl Session {
 
     pub fn disconnect<'a>(&self, py: Python<'a>) -> PyResult<()> {
         if self.shutdown_tx.is_none() {
+            warn!("[Session:{}] Disconnect requested but listener is not running", self.session_id);
             return Err(PyOSError::new_err("Session isn't running at all!"));
         }
 
         let inner = self.clone();
+        info!("[Session:{}] Disconnect requested", self.session_id);
         let _ = pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let frame = PyAttpMessage::new(0, AttpCommand::DISCONNECT, None, None, [0, 1]);
 
@@ -395,14 +453,24 @@ impl Session {
 impl Session {
     pub async fn handle_messages(&mut self) {
         if self.message_reader.is_none() {
+            warn!(
+                "[Session:{}] handle_messages called without message_reader",
+                self.session_id
+            );
             return;
         }
 
+        info!("[Session:{}] Message handler started", self.session_id);
         if let Some(receiver) = &mut self.message_reader {
             let mut receiver_guard = receiver.lock().await;
             loop {
                 match receiver_guard.recv().await {
                     Some(received) => {
+                        trace!(
+                            "[Session:{}] Dispatching {} message(s) to handlers",
+                            self.session_id,
+                            received.len()
+                        );
                         Python::attach(|py| {
                             let py_attp_messages =
                                 PyList::new(py, received.iter().map(|i| PyAttpMessage::from_attp(i)))

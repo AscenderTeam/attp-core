@@ -3,6 +3,7 @@
 /// See the project license for terms of use.
 
 use crate::attp::shared::errors::DecodeError;
+use log::{debug, warn};
 
 #[inline]
 pub fn read_var_u32(buf: &[u8], off: &mut usize) -> Result<u32, DecodeError> {
@@ -43,12 +44,14 @@ pub fn write_var_u32(out: &mut Vec<u8>, mut v: u32) {
 #[inline]
 pub fn parse_connection_string(con_str: String) -> Result<(String, u16), &'static str> {
     if !con_str.starts_with("attp://") {
+        warn!("[utils] Connection string missing attp:// prefix");
         return Err("Failed to parse attp connection string!");
     }
 
     let clean_con_str = con_str.strip_prefix("attp://");
 
     if clean_con_str.is_none() {
+        warn!("[utils] Failed to strip attp:// prefix");
         return Err("Attp connection string should contain `attp://` prefix");        
     }
 
@@ -58,6 +61,7 @@ pub fn parse_connection_string(con_str: String) -> Result<(String, u16), &'stati
     let port: u16;
 
     if split.len() < 2 {
+        warn!("[utils] Connection string missing host/port: {con_str}");
         return Err("ATTP connection string uses wrong format!");
     }
 
@@ -67,9 +71,11 @@ pub fn parse_connection_string(con_str: String) -> Result<(String, u16), &'stati
         port = parsed;
     }
     else {
+        warn!("[utils] Invalid port in connection string: {con_str}");
         return Err("Port slice in ATTP connection string must be integer");
     }
 
+    debug!("[utils] Parsed connection string: host={}, port={}", host, port);
     Ok((host, port))
     
 }
