@@ -16,7 +16,7 @@
 /// =============================================
 
 
-use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyString};
+use pyo3::{exceptions::PyRuntimeError, prelude::*};
 use env_logger::Env;
 use log::{debug, error, info};
 
@@ -47,6 +47,7 @@ fn attp_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 #[pyfunction]
+#[pyo3(signature = (filter = "info"))]
 fn init_logging(filter: &str) -> PyResult<()> {
     // Initialize logger once; ignore error if already initialized.
     let mut builder = env_logger::Builder::from_env(Env::default().default_filter_or(filter));

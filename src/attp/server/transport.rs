@@ -91,13 +91,17 @@ impl AttpTransport {
                 tokio::select! {
                         _ = rx.changed() => break,
                         accept_res = listener.accept() => {
-                            let (sock, _) = accept_res.map_err(|e| {
+                            let (sock, peer) = accept_res.map_err(|e| {
                                 warn!("[AttpTransport] Accept failed: {e}");
                                 PyOSError::new_err(format!("Failed to accept connection {e}"))
                             })?;
 
                             let session_id = Uuid::new_v4().to_string();
-                            info!("[AttpTransport] Accepted connection session_id={}", session_id);
+                            info!(
+                                "[AttpTransport] Accepted connection session_id={} peer={}",
+                                session_id,
+                                peer
+                            );
                             let session = Session::new(sock, session_id, limits);
 
                             let fire = Python::attach(|pyt| {

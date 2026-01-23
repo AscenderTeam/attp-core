@@ -187,6 +187,15 @@ impl Session {
                         r.len()
                     );
                     for msg in r.iter() {
+                        trace!(
+                            "[Session:{}] Received frame command={:?} route_id={} has_correlation={} payload_len={} version={:?}",
+                            self.session_id,
+                            msg.command_type,
+                            msg.route_id,
+                            msg.correlation_id.is_some(),
+                            msg.payload.as_ref().map(|p| p.len()).unwrap_or(0),
+                            msg.version
+                        );
                         if msg.command_type == AttpCommand::PING {
                             trace!("[Session:{}] Responding to PING", self.session_id);
                             let pong = AttpMessage::new(
@@ -259,10 +268,13 @@ impl Session {
         // let _guard = self.writer_lock.lock().await; || We don't need this anymore lol >_0
 
         trace!(
-            "[Session:{}] Sending frame command={:?} route_id={}",
+            "[Session:{}] Sending frame command={:?} route_id={} has_correlation={} payload_len={} version={:?}",
             self.session_id,
             frame.command_type,
-            frame.route_id
+            frame.route_id,
+            frame.correlation_id.is_some(),
+            frame.payload.as_ref().map(|p| p.len()).unwrap_or(0),
+            frame.version
         );
         let bytes = frame.to_bytes();
 
@@ -470,6 +482,12 @@ impl Session {
                             "[Session:{}] Dispatching {} message(s) to handlers",
                             self.session_id,
                             received.len()
+                        );
+                        let handlers_len = self.event_receivers.lock().unwrap().len();
+                        trace!(
+                            "[Session:{}] Handlers registered: {}",
+                            self.session_id,
+                            handlers_len
                         );
                         Python::attach(|py| {
                             let py_attp_messages =
