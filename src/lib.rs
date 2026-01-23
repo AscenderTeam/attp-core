@@ -28,6 +28,9 @@ mod attp;
 #[pymodule]
 #[pyo3(name="rs_api")]
 fn attp_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Ensure Python is initialized for callbacks from tokio worker threads.
+    pyo3::prepare_freethreaded_python();
+
     m.add_class::<AttpMessage>()?;
     m.add_class::<PyAttpMessage>()?;
     m.add_class::<Session>()?;
