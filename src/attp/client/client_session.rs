@@ -92,11 +92,10 @@ impl AttpClientSession {
                     .await
                 {
                     warn!("[AttpClientSession] Lost connection: {:?}", err);
-                    // Gracefully shut down the session
-                    if let Some(s) = inner.session.clone() {
-                        let _ = s.stop_listener();
+                    if is_connection_error(&err) {
+                        let _ = session.disconnect_internal().await;
+                        break;
                     }
-                    break;
                 }
             }
         });
@@ -134,6 +133,18 @@ impl AttpClientSession {
 
         return Some(session);
     }
+}
+
+fn is_connection_error(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::NotConnected
+            | std::io::ErrorKind::UnexpectedEof
+            | std::io::ErrorKind::TimedOut
+    )
 }
 
 #[pymethods]

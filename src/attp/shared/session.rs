@@ -86,6 +86,14 @@ impl Session {
     }
 
     pub fn start_listening(&mut self) {
+        if self.message_writer.is_some()
+            && self.message_reader.is_some()
+            && self.shutdown_rx.is_some()
+            && self.shutdown_tx.is_some()
+        {
+            return;
+        }
+
         let (message_writer, message_listener) = mpsc::channel::<Vec<AttpMessage>>(1040);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
@@ -160,6 +168,18 @@ impl Session {
 
             match self.read_batch(max_output, max_bytes) {
                 Ok(r) => {
+                    for msg in r.iter() {
+                        if msg.command_type == AttpCommand::PING {
+                            let pong = AttpMessage::new(
+                                msg.route_id,
+                                AttpCommand::PONG as u8,
+                                msg.correlation_id,
+                                None,
+                                msg.version,
+                            );
+                            let _ = self._send(pong).await;
+                        }
+                    }
                     if !self.message_writer.is_none() {
                         let _ = self.message_writer.as_ref().unwrap().send(r).await;
                     }
@@ -220,7 +240,9 @@ impl Session {
 
         let bytes = frame.to_bytes();
 
-        let _ = self.tx.send(bytes).await;
+        self.tx.send(bytes).await.map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::BrokenPipe, "writer channel closed")
+        })?;
 
         Ok(())
     }
@@ -233,7 +255,20 @@ impl Session {
             all_bytes.extend_from_slice(&bytes);
         }
 
-        let _ = self.tx.send(all_bytes).await;
+        self.tx.send(all_bytes).await.map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::BrokenPipe, "writer channel closed")
+        })?;
+
+        Ok(())
+    }
+
+    pub async fn disconnect_internal(&self) -> tokio::io::Result<()> {
+        let frame = AttpMessage::new(0, AttpCommand::DISCONNECT as u8, None, None, b"01".clone());
+        let _ = self._send(frame).await;
+
+        if let Some(tx) = &self.shutdown_tx {
+            let _ = tx.send(true);
+        }
 
         Ok(())
     }
@@ -261,9 +296,9 @@ impl Session {
     }
 
     pub fn start_listener<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.start_listening();
         let mut inner = self.clone();
 
-        self.start_listening(); // Damn, almost forgot to call this fn, I would get cracked if wouldn't call this lol >_0;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             inner
             .listen(3000, 3000)
@@ -272,7 +307,8 @@ impl Session {
         })
     }
 
-    pub fn start_handler<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    pub fn start_handler<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.start_listening();
         let inner = Arc::new(Mutex::new(self.clone()));
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -373,9 +409,16 @@ impl Session {
                                     .unwrap_or_else(|_| PyList::empty(py));
                             for event_receiver in self.event_receivers.lock().unwrap().iter() {
                                 let bound_receiver = event_receiver.bind(py).to_owned();
-                                if let Ok(awaitable) = bound_receiver.call1((py_attp_messages.clone(),))
+                                if let Ok(awaitable) =
+                                    bound_receiver.call1((py_attp_messages.clone(),))
                                 {
-                                    pyo3_async_runtimes::tokio::into_future(awaitable).ok();
+                                    if let Ok(fut) =
+                                        pyo3_async_runtimes::tokio::into_future(awaitable)
+                                    {
+                                        tokio::spawn(async move {
+                                            let _ = fut.await;
+                                        });
+                                    }
                                 }
                             }
                         });
